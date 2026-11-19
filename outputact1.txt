@@ -1,0 +1,128 @@
+================================================================================
+TASK 1 - CAN arbitration (all four frames ready at t = 0)
+================================================================================
+  Round 1: contenders = ['ABS', 'Airbag', 'Engine', 'Dashboard']
+    Bit  9: bus=dominant(0) -> Dashboard back off
+    Bit  8: bus=dominant(0) -> Engine back off
+    Bit  7: bus=dominant(0) -> ABS back off
+    -> winner: Airbag (0x040)
+  Round 2: contenders = ['ABS', 'Engine', 'Dashboard']
+    Bit  9: bus=dominant(0) -> Dashboard back off
+    Bit  8: bus=dominant(0) -> Engine back off
+    -> winner: ABS (0x080)
+  Round 3: contenders = ['Engine', 'Dashboard']
+    Bit  9: bus=dominant(0) -> Dashboard back off
+    -> winner: Engine (0x180)
+  Round 4: contenders = ['Dashboard']
+    -> winner: Dashboard (0x300)
+
+  Transmission order: Airbag (0x040)  ->  ABS (0x080)  ->  Engine (0x180)  ->  Dashboard (0x300)
+
+================================================================================
+TASKS 2 & 3 - Timing at 500 kbit/s, error-free
+================================================================================
+  T_frame = (47 + 8*8) * 1.2 / 500000 = 266.4 us per 8-byte frame
+   # Message                Tx time        Wait      Finish   Deadline Tries  Status
+   1 Airbag (0x040)        266.4 us      0.0 us    266.4 us     2.0 ms     1  MEETS (critical)
+   2 ABS (0x080)           266.4 us    266.4 us    532.8 us     2.0 ms     1  MEETS (critical)
+   3 Engine (0x180)        266.4 us    532.8 us    799.2 us    10.0 ms     1  MEETS
+   4 Dashboard (0x300)     266.4 us    799.2 us   1065.6 us    50.0 ms     1  MEETS
+  Cumulative wait: 1598.4 us | Bus busy until: 1065.6 us
+
+  Safety-critical messages within 2 ms: YES
+
+================================================================================
+TASK 4 - ABS frame corrupted once, automatic retransmission
+================================================================================
+  t=     0.0 us  Airbag (0x040)     OK (attempt 1), finishes at 266.4 us
+  t=   266.4 us  ABS (0x080)        ERROR detected -> error frame (23 bits), retrying
+  t=   578.8 us  ABS (0x080)        OK (attempt 2), finishes at 845.2 us
+  t=   845.2 us  Engine (0x180)     OK (attempt 1), finishes at 1111.6 us
+  t=  1111.6 us  Dashboard (0x300)  OK (attempt 1), finishes at 1378.0 us
+
+   # Message                Tx time        Wait      Finish   Deadline Tries  Status
+   1 Airbag (0x040)        266.4 us      0.0 us    266.4 us     2.0 ms     1  MEETS (critical)
+   2 ABS (0x080)           266.4 us    578.8 us    845.2 us     2.0 ms     2  MEETS (critical)
+   3 Engine (0x180)        266.4 us    845.2 us   1111.6 us    10.0 ms     1  MEETS
+   4 Dashboard (0x300)     266.4 us   1111.6 us   1378.0 us    50.0 ms     1  MEETS
+  Cumulative wait: 2535.6 us | Bus busy until: 1378.0 us
+
+  ABS delayed by 312.4 us (failed frame + 23-bit error frame). Because ABS keeps
+  its low ID, it wins re-arbitration against Engine/Dashboard and still
+  meets the 2 ms deadline.
+
+================================================================================
+WORST-CASE RESPONSE TIME (any release phasing, 1 error allowed)
+================================================================================
+  Airbag (0x040)     R_worst =    845.2 us  deadline   2.0 ms  slack   1154.8 us  MEETS
+  ABS (0x080)        R_worst =   1111.6 us  deadline   2.0 ms  slack    888.4 us  MEETS
+  Engine (0x180)     R_worst =   1378.0 us  deadline  10.0 ms  slack   8622.0 us  MEETS
+  Dashboard (0x300)  R_worst =   1378.0 us  deadline  50.0 ms  slack  48622.0 us  MEETS
+  Average bus load: 7.2%
+
+================================================================================
+TASK 5 - Is a higher bit rate always better?
+================================================================================
+  Assumptions: 5 ns/m cable delay, 150 ns node delay, 70% propagation budget, 1 error per window
+       Rate       Frame   Load  WC crit resp    Lmax Len margin  Verdict
+     125 k   1065.6 us  28.8%     4446.4 us    530 m    +1225%  deadline missed (worst case)
+     250 k    532.8 us  14.4%     2223.2 us    250 m     +525%  deadline missed (worst case)
+     500 k    266.4 us   7.2%     1111.6 us    110 m     +175%  OK
+    1000 k    133.2 us   3.6%      555.8 us     40 m       +0%  timing OK, low physical margin
+
+  At 40 m, 1 Mbit/s sits at the physical limit (no margin for stubs,
+  connectors, temperature, or transceiver skew) while 500 kbit/s already
+  meets every deadline at low bus load. Faster is NOT automatically better.
+
+================================================================================
+Q1 - ABS outranked by an 8-frame infotainment burst (IDs 0x020-0x027)
+================================================================================
+  Airbag (0x040)     finishes at   2397.6 us  -> MISSES 2 ms deadline
+  ABS (0x080)        finishes at   2664.0 us  -> MISSES 2 ms deadline
+
+================================================================================
+Q3a - 10 s of periodic traffic on a noisy bus (BER = 1e-4)
+================================================================================
+  Measured bus utilisation: 7.3%
+  Message              Sent  Errors    Max resp  Deadline  Misses  Dropped  Overwr.
+  Airbag (0x040)        500       7    578.8 us    2.0 ms       0        0        0
+  ABS (0x080)          1000      14   1111.6 us    2.0 ms       0        0        0
+  Engine (0x180)       1000      13   1378.0 us   10.0 ms       0        0        0
+  Dashboard (0x300)     200       3   1644.4 us   50.0 ms       0        0        0
+
+================================================================================
+Q3b - Engine transceiver fails between t = 1 s and t = 2 s
+================================================================================
+  Measured bus utilisation: 17.5%
+  Message              Sent  Errors    Max resp  Deadline  Misses  Dropped  Overwr.
+  Airbag (0x040)        150       0    578.8 us    2.0 ms       0        0        0
+  ABS (0x080)           300       0    845.2 us    2.0 ms       0        0        0
+  Engine (0x180)        200    2432    799.2 us   10.0 ms       0      100        0
+  Dashboard (0x300)      60       0   1378.0 us   50.0 ms       0        0        0
+  Fault-confinement state changes (first 8):
+    t= 1005.531 ms  Engine     error-active -> error-passive (TEC=128)
+    t= 1010.785 ms  Engine    error-passive -> bus-off       (TEC=256)
+    t= 1013.601 ms  Engine          bus-off -> error-active  (TEC=0)
+    t= 1025.531 ms  Engine     error-active -> error-passive (TEC=128)
+    t= 1030.785 ms  Engine    error-passive -> bus-off       (TEC=256)
+    t= 1033.601 ms  Engine          bus-off -> error-active  (TEC=0)
+    t= 1045.531 ms  Engine     error-active -> error-passive (TEC=128)
+    t= 1050.785 ms  Engine    error-passive -> bus-off       (TEC=256)
+    ... 220 more
+  The faulty node reaches bus-off after 32 failed attempts, preventing it
+  from monopolising the bus; ABS and Airbag continue meeting deadlines.
+
+================================================================================
+TASK 6 - Recommendation (derived from simulation results)
+================================================================================
+  * Bit rate: 500 kbit/s - slowest rate meeting all worst-case
+    deadlines (with 1 error) AND leaving >= 25% cable-length margin.
+  * ID allocation: reserve lowest IDs for safety-critical frames
+    (Airbag 0x040, ABS 0x080); assign higher IDs to non-critical traffic.
+  * Network segmentation: isolate infotainment/comfort traffic on a
+    separate bus behind a rate-limiting gateway.
+  * Load & verification: keep safety-bus utilisation below ~30-40% and
+    validate with worst-case response-time analysis under fault models.
+  * Fault tolerance: rely on CAN TEC/REC bus-off confinement, heartbeat
+    timeouts, and a bus guardian. If higher throughput is needed, adopt
+    CAN FD (robust arbitration rate, faster data phase).

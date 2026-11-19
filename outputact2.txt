@@ -1,0 +1,123 @@
+================================================================================
+TASK 1 - Transmission time of one 8-byte frame
+================================================================================
+  Effective bits/frame = (47 + 8*8) * 1.2 = 133.2
+  CAN     @    500 kbit/s:   0.266 ms
+  FlexRay @    5.0 Mbit/s:   0.027 ms  (10.0x faster)
+  All five messages carry 8-byte payloads, so each shares these transmission times.
+
+================================================================================
+TASK 2 - Busy CAN bus: emergency manoeuvre, 15 frames ready at t = 0
+================================================================================
+   #  Message                    ID     Starts    Arrives   Deadline  Status
+   1  Airbag pre-crash        0x004   0.000 ms   0.266 ms  20.000 ms
+   2  ESC yaw rate            0x008   0.266 ms   0.533 ms  10.000 ms
+   3  Brake command           0x010   0.533 ms   0.799 ms   5.000 ms  MEETS
+   4  ADAS object #1          0x011   0.799 ms   1.066 ms 100.000 ms
+   5  ADAS object #2          0x012   1.066 ms   1.332 ms 100.000 ms
+   6  ADAS object #3          0x013   1.332 ms   1.598 ms 100.000 ms
+   7  ADAS object #4          0x014   1.598 ms   1.865 ms 100.000 ms
+   8  ADAS object #5          0x015   1.865 ms   2.131 ms 100.000 ms
+   9  ADAS object #6          0x016   2.131 ms   2.398 ms 100.000 ms
+  10  ADAS object #7          0x017   2.398 ms   2.664 ms 100.000 ms
+  11  ADAS object #8          0x018   2.664 ms   2.930 ms 100.000 ms
+  12  Steering command        0x040   2.930 ms   3.197 ms   5.000 ms  MEETS
+  13  Wheel-speed data        0x050   3.197 ms   3.463 ms  10.000 ms  MEETS
+  14  Battery status          0x100   3.463 ms   3.730 ms 100.000 ms  MEETS
+  15  Infotainment update     0x200   3.730 ms   3.996 ms 100.000 ms  MEETS
+
+  Steering waits behind 11 higher-priority frames (~3 ms queued before transmission).
+
+  Steering latency vs. ADAS burst size:
+   ADAS frames  CAN steering   Status   FlexRay steering
+             0      1.066 ms    MEETS     0.027 ms (constant)
+             4      2.131 ms    MEETS     0.027 ms (constant)
+             8      3.197 ms    MEETS     0.027 ms (constant)
+            12      4.262 ms    MEETS     0.027 ms (constant)
+            15      5.062 ms   MISSES     0.027 ms (constant)
+            20      6.394 ms   MISSES     0.027 ms (constant)
+  CAN latency scales with contending traffic; a FlexRay static slot is isolated.
+
+================================================================================
+TASK 3 - Deterministic FlexRay schedule (one 5 ms cycle)
+================================================================================
+    0-  1 ms  static slot 1: Steering command
+    1-  2 ms  static slot 2: Brake command
+    2-  3 ms  static slot 3: Wheel-speed data
+    3-  4 ms  static slot 4: spare (growth / redundancy)
+    4-  5 ms  dynamic segment (event traffic) + NIT/idle
+  ... pattern repeats deterministically every 5 ms.
+
+================================================================================
+TASKS 4 & 5 - Worst-case latency and deadlines (1 CAN error allowed)
+================================================================================
+  CAN worst = 5 vehicle messages only, arbitrary phasing, with error overhead.
+  CAN busy  = 15-frame emergency burst from Task 2.
+  Message                  Deadline  CAN worst   CAN busy    FR sync  FR unsync  CAN-WC
+  Steering command         5.000 ms   1.112 ms   3.197 ms   0.027 ms   5.027 ms  MEETS
+  Brake command            5.000 ms   0.845 ms   0.799 ms   0.027 ms   5.027 ms  MEETS
+  Wheel-speed data        10.000 ms   1.378 ms   3.463 ms   0.027 ms   5.027 ms  MEETS
+  Battery status         100.000 ms   1.644 ms   3.730 ms          -          -  MEETS
+  Infotainment update    100.000 ms   1.644 ms   3.996 ms          -          -  MEETS
+
+  CAN bus load (5 vehicle messages): 14.9%
+  * CAN meets deadlines in isolation, but extra bursts or multiple errors push
+    steering past its 5 ms limit.
+  * Unsynchronised FlexRay slightly misses 5 ms (5.027 ms) if data arrives just
+    after its slot opens.
+  * Synchronised FlexRay delivers a constant 0.027 ms latency regardless of load.
+
+================================================================================
+TASK 6 - Recommended hybrid architecture
+================================================================================
+  Steering command       -> FlexRay  safety-critical, periodic, tight deadline -> needs a guaranteed slot
+  Brake command          -> FlexRay  safety-critical, periodic, tight deadline -> needs a guaranteed slot
+  Wheel-speed data       -> FlexRay  safety-critical, periodic, tight deadline -> needs a guaranteed slot
+  Battery status         -> CAN      relaxed deadline; CAN worst-case latency stays well within bounds
+  Infotainment update    -> CAN      event-driven: a reserved static slot would stay idle most cycles
+
+  FlexRay (Channels A + B): steering, brake, wheel speed in static slots 1-3
+  CAN (500 kbit/s)        : battery status, infotainment (+ safety fallback)
+  Central Gateway ECU     : bridges and rate-limits traffic between domains
+
+================================================================================
+Q1 - Give steering the top CAN ID (0x001). Does that solve everything?
+================================================================================
+  Steering command     before   3.197 ms   after   0.266 ms
+  Airbag pre-crash     before   0.266 ms   after   0.533 ms
+  ESC yaw rate         before   0.533 ms   after   0.799 ms
+  Brake command        before   0.799 ms   after   1.066 ms
+
+  Even at ID 0x001, steering can still be delayed by:
+    1 lower-priority frame already on the bus :   0.266 ms
+    1 bus error + retransmission              :   0.312 ms
+  Meanwhile, Airbag, ESC, and Brake are each pushed back by one frame.
+
+================================================================================
+Q2 - Why not move every message onto FlexRay?
+================================================================================
+  Static slots available per cycle : 4
+  Slots needed for 5 messages alone: 5 (excluding Airbag, ESC, ADAS, etc.)
+  Utilisation of a 1 ms slot       : 2.7%
+  Battery status (100 ms) in a 5 ms slot wastes 19 out of every 20 slots.
+  Event-driven infotainment traffic would leave its reserved slot mostly empty.
+
+================================================================================
+Q3 - Fallback when a communication channel fails
+================================================================================
+  Normal       : steering, brake, wheel speed duplicated on FlexRay A & B.
+  Channel A off: Channel B continues seamlessly at 0.027 ms.
+  FlexRay lost : safety frames fall back to reserved top CAN IDs,
+                 infotainment is shed, and the vehicle enters safe-stop mode.
+  Message                Busy burst  Worst case   Deadline  Status
+  Steering command         0.266 ms    0.845 ms   5.000 ms  MEETS
+  Brake command            0.533 ms    1.112 ms   5.000 ms  MEETS
+  Wheel-speed data         0.799 ms    1.378 ms  10.000 ms  MEETS
+  Battery status           3.730 ms    1.911 ms 100.000 ms  MEETS
+
+================================================================================
+Q4 - Lowest-cost architecture that still meets every deadline
+================================================================================
+  Keep Steering + Brake on FlexRay; move Wheel-speed to CAN at ID 0x00C.
+  Wheel-speed on CAN: worst case 1.378 ms, busy burst 0.799 ms, deadline 10.000 ms -> MEETS
+  Fewer FlexRay ECUs reduces controller, transceiver, and harness costs.

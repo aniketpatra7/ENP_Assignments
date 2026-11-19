@@ -1,0 +1,15 @@
+=== CAN Hardware Architecture Selection ===
+Hardware Path : Microcontroller -> SPI/Parallel Bus -> SJA1000 CAN Controller -> CAN Transceiver -> CAN Bus
+Controller    : FULL CAN (SJA1000 PeliCAN mode)
+Reason        : 32 identifiers (> 15); 64-byte RX FIFO and hardware filtering prevent CPU overload.
+
+=== Acceptance Filter Verification ===
+Required CAN ID : 0x123  (11-bit: 00100100011)
+ID Top 8 Bits   : 0x24   (bin: 00100100)
+ACR (Code)      : 0x24   (bin: 00100100)
+AMR (Mask)      : 0x03   (bin: 00000011)  [1 = don't care]
+Active Mask     : 0xFC   (bin: 11111100)  [1 = must match]
+Verdict         : MATCH (ACCEPT) for message ID 0x123.
+
+=== Data Length Check ===
+Data Length     : 8 bytes -> VALID (Standard CAN supports 0-8 bytes).
